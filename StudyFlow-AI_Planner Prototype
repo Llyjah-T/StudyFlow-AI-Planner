@@ -1,0 +1,179 @@
+!pip install transformers accelerate sentencepiece
+
+from transformers import pipeline
+import datetime
+from dataclasses import dataclass
+import pandas as pd
+import json
+
+# -----------------------------
+# Load FLAN-T5 model
+# -----------------------------
+llm = pipeline("text-generation", model="google/flan-t5-base")
+
+
+# -----------------------------
+# Assignment data structure
+# -----------------------------
+@dataclass
+class Assignment:
+    title: str
+    description: str
+    due_date: datetime.date
+    difficulty: int
+    estimated_hours: float = 0
+    priority: float = 0
+    llm_suggestion: str = ""
+    daily_plan: list = None
+
+
+# -----------------------------
+# ANSI color codes for readability
+# -----------------------------
+class Colors:
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    END = "\033[0m"
+
+
+# -----------------------------
+# Priority score calculation
+# -----------------------------
+def priority_score(difficulty, days_left):
+    """Higher difficulty + fewer days = higher priority."""
+    if days_left <= 0:
+        return 10
+    return round((difficulty * 2) + (5 / days_left), 2)
+
+
+# -----------------------------
+# LLM study suggestion
+# -----------------------------
+def llm_study_suggestion(description: str) -> str:
+    prompt = (
+        "Give a short, practical study strategy for this assignment in 2–3 sentences: "
+        f"{description}. Keep it clear, simple, and realistic for a college student."
+    )
+    result = llm(prompt, max_new_tokens=80)[0]["generated_text"]
+    cleaned = result.replace("\n", " ").strip()
+    return cleaned
+
+
+# -----------------------------
+# Time estimation
+# -----------------------------
+def estimate_time(description: str, difficulty: int) -> float:
+    """
+    Simple estimation model:
+    - Base hours from difficulty
+    - Add small boost for long descriptions
+    """
+    base = difficulty * 1.5
+    length_factor = len(description.split()) / 40
+    return round(base + length_factor, 2)
+
+
+# -----------------------------
+# Build daily study schedule
+# -----------------------------
+def build_schedule(assignment: Assignment, start_date: datetime.date):
+    days_left = (assignment.due_date - start_date).days
+
+    # Priority score
+    assignment.priority = priority_score(assignment.difficulty, days_left)
+
+    # Color selection based on priority
+    if assignment.priority >= 8:
+        color = Colors.RED
+    elif assignment.priority >= 6:
+        color = Colors.YELLOW
+    else:
+        color = Colors.GREEN
+
+    # If due today or overdue
+    if days_left <= 0:
+        assignment.daily_plan = [
+            f"{color}⚠ URGENT: Complete all {assignment.estimated_hours} hours TODAY (past/near due).{Colors.END}"
+        ]
+        return
+
+    hours_per_day = assignment.estimated_hours / days_left
+    assignment.daily_plan = []
+
+    for i in range(days_left):
+        day = start_date + datetime.timedelta(days=i)
+        assignment.daily_plan.append(
+            f"{color}{day.isoformat()} — Work {hours_per_day:.2f} hrs on '{assignment.title}' "
+            f"(Priority {assignment.priority}){Colors.END}"
+        )
+
+
+# -----------------------------
+# Main StudyFlow runner
+# -----------------------------
+def run_studyflow():
+    print(f"{Colors.HEADER}{Colors.BOLD}Welcome to StudyFlow AI — Smart Study Planner{Colors.END}\n")
+
+    num_assignments = int(input("How many assignments do you want to plan for? "))
+
+    assignments = []
+    today = datetime.date.today()
+
+    for i in range(num_assignments):
+        print(f"\n{Colors.CYAN}--- Assignment {i+1} ---{Colors.END}")
+        title = input("Title: ")
+        description = input("Short description: ")
+        due_str = input("Due date (YYYY-MM-DD): ")
+        difficulty = int(input("Difficulty (1–5): "))
+
+        due_date = datetime.datetime.strptime(due_str, "%Y-%m-%d").date()
+        est_hours = estimate_time(description, difficulty)
+
+        a = Assignment(
+            title=title,
+            description=description,
+            due_date=due_date,
+            difficulty=difficulty,
+            estimated_hours=est_hours,
+        )
+
+        a.llm_suggestion = llm_study_suggestion(description)
+        build_schedule(a, today)
+        assignments.append(a)
+
+    # Build summary table
+    data = []
+    for a in assignments:
+        data.append({
+            "Title": a.title,
+            "Due Date": a.due_date.isoformat(),
+            "Difficulty": a.difficulty,
+            "Est. Hours": a.estimated_hours,
+            "Priority": a.priority,
+        })
+
+    df = pd.DataFrame(data).sort_values(by="Priority", ascending=False)
+
+    print(f"\n{Colors.BOLD}{Colors.BLUE}=== Assignment Overview (Highest Priority First) ==={Colors.END}")
+    print(df.to_string(index=False))
+
+    # Detailed plans
+    for a in assignments:
+        print(f"\n{Colors.BOLD}{Colors.GREEN}Plan for: {a.title}{Colors.END}")
+        print(f"{Colors.YELLOW}LLM Suggestion:{Colors.END} {a.llm_suggestion}")
+        print(f"{Colors.CYAN}Daily Plan:{Colors.END}")
+        for line in a.daily_plan:
+            print(line)
+
+
+# -----------------------------
+# Run the StudyFlow AI program
+# -----------------------------
+run_studyflow()
+
+
